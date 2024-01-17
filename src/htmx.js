@@ -1,6 +1,40 @@
 var htmx = (function() {
   'use strict'
 
+  var trustedTypesAPI
+  if (trustedTypes) {
+    trustedTypesAPI = trustedTypes
+  } else {
+    // @ts-ignore
+    trustedTypesAPI = {
+      createPolicy: function(_, options) {
+        return options
+      },
+      getAttributeType() {
+        return ''
+      }
+    }
+  }
+
+  const htmxPolicy = trustedTypesAPI.createPolicy('htmx', {
+    createHTML: (s) => s,
+    createScript: (s) => s,
+    createScriptURL: (s) => s
+  })
+
+  function setAttribute(target, attr) {
+    var type = trustedTypesAPI.getAttributeType(target.tagName, attr.name)
+    if (type === 'TrustedHTML') {
+      target.setAttribute(attr.name, htmxPolicy.createHTML(attr.value))
+    } else if (type === 'TrustedScript') {
+      target.setAttribute(attr.name, htmxPolicy.createScript(attr.value))
+    } else if (type === 'TrustedScriptURL') {
+      target.setAttribute(attr.name, htmxPolicy.createScriptURL(attr.value))
+    } else {
+      target.setAttribute(attr.name, attr.value)
+    }
+  }
+
   // Public API
   const htmx = {
     // Tsc madness here, assigning the functions directly results in an invalid TypeScript output, but reassigning is fine
@@ -522,7 +556,7 @@ var htmx = (function() {
    */
   function parseHTML(resp) {
     const parser = new DOMParser()
-    return parser.parseFromString(resp, 'text/html')
+    return parser.parseFromString(htmxPolicy.createHTML(resp), 'text/html')
   }
 
   /**
@@ -542,9 +576,9 @@ var htmx = (function() {
   function duplicateScript(script) {
     const newScript = getDocument().createElement('script')
     forEach(script.attributes, function(attr) {
-      newScript.setAttribute(attr.name, attr.value)
+      setAttribute(newScript, attr)
     })
-    newScript.textContent = script.textContent
+    newScript.textContent = htmxPolicy.createScript(script.textContent)
     newScript.async = false
     if (htmx.config.inlineScriptNonce) {
       newScript.nonce = htmx.config.inlineScriptNonce
@@ -1383,7 +1417,7 @@ var htmx = (function() {
     })
     forEach(mergeFrom.attributes, function(attr) {
       if (shouldSettleAttribute(attr.name)) {
-        mergeTo.setAttribute(attr.name, attr.value)
+        setAttribute(mergeTo, attr)
       }
     })
   }
@@ -2050,7 +2084,7 @@ var htmx = (function() {
             conditionalSource += ')})'
             try {
               const conditionFunction = maybeEval(elt, function() {
-                return Function(conditionalSource)()
+                return Function(htmxPolicy.createScript(conditionalSource))()
               },
               function() { return true })
               conditionFunction.source = conditionalSource
@@ -2741,7 +2775,9 @@ var htmx = (function() {
           return
         }
         if (!func) {
-          func = new Function('event', code)
+          // TODO: This won't actually work in Chromium atm due to a bug with Trusted Types implementation
+          // You'd have to use eval instead. See https://github.com/angular/angular/blob/3bfba7ec1530d451f53e5d85516a33400550bbb3/packages/core/src/util/security/trusted_types.ts#L119
+          func = new Function('event', htmxPolicy.createScript(code))
         }
         func.call(elt, e)
       })
@@ -3729,7 +3765,7 @@ var htmx = (function() {
       }
       let varsValues
       if (evaluateValue) {
-        varsValues = maybeEval(elt, function() { return Function('return (' + str + ')')() }, {})
+        varsValues = maybeEval(elt, function() { return Function(htmxPolicy.createScript('return (' + str + ')'))() }, {})
       } else {
         varsValues = parseJSON(str)
       }
@@ -4540,7 +4576,7 @@ var htmx = (function() {
     if (title) {
       const titleElt = find('title')
       if (titleElt) {
-        titleElt.innerHTML = title
+        titleElt.textContent = title
       } else {
         window.document.title = title
       }
@@ -4890,11 +4926,11 @@ var htmx = (function() {
     if (htmx.config.includeIndicatorStyles !== false) {
       const nonceAttribute = htmx.config.inlineStyleNonce ? ` nonce="${htmx.config.inlineStyleNonce}"` : ''
       getDocument().head.insertAdjacentHTML('beforeend',
-        '<style' + nonceAttribute + '>\
+        htmxPolicy.createHTML('<style' + nonceAttribute + '>\
       .' + htmx.config.indicatorClass + '{opacity:0}\
       .' + htmx.config.requestClass + ' .' + htmx.config.indicatorClass + '{opacity:1; transition: opacity 200ms ease-in;}\
       .' + htmx.config.requestClass + '.' + htmx.config.indicatorClass + '{opacity:1; transition: opacity 200ms ease-in;}\
-      </style>')
+      </style>'))
     }
   }
 
