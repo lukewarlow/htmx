@@ -1,6 +1,40 @@
 var htmx = (function() {
   'use strict'
 
+  var trustedTypesAPI
+  if (trustedTypes) {
+    trustedTypesAPI = trustedTypes
+  } else {
+    // @ts-ignore
+    trustedTypesAPI = {
+      createPolicy: function(_, options) {
+        return options
+      },
+      getAttributeType() {
+        return ''
+      }
+    }
+  }
+
+  const htmxPolicy = trustedTypesAPI.createPolicy('htmx', {
+    createHTML: (s) => s,
+    createScript: (s) => s,
+    createScriptURL: (s) => s
+  })
+
+  function setAttribute(target, attr) {
+    var type = trustedTypesAPI.getAttributeType(target.tagName, attr.name)
+    if (type === 'TrustedHTML') {
+      target.setAttribute(attr.name, htmxPolicy.createHTML(attr.value))
+    } else if (type === 'TrustedScript') {
+      target.setAttribute(attr.name, htmxPolicy.createScript(attr.value))
+    } else if (type === 'TrustedScriptURL') {
+      target.setAttribute(attr.name, htmxPolicy.createScriptURL(attr.value))
+    } else {
+      target.setAttribute(attr.name, attr.value)
+    }
+  }
+
   // Public API
   const htmx = {
     // Tsc madness here, assigning the functions directly results in an invalid TypeScript output, but reassigning is fine
@@ -509,8 +543,11 @@ var htmx = (function() {
    * @returns {Document}
    */
   function parseHTML(resp) {
+    if ('parseHTMLUnsafe' in Document) {
+      return Document.parseHTMLUnsafe(htmxPolicy.createHTML(resp))
+    }
     const parser = new DOMParser()
-    return parser.parseFromString(resp, 'text/html')
+    return parser.parseFromString(htmxPolicy.createHTML(resp), 'text/html')
   }
 
   /**
@@ -530,9 +567,9 @@ var htmx = (function() {
   function duplicateScript(script) {
     const newScript = getDocument().createElement('script')
     forEach(script.attributes, function(attr) {
-      newScript.setAttribute(attr.name, attr.value)
+      setAttribute(newScript, attr)
     })
-    newScript.textContent = script.textContent
+    newScript.textContent = htmxPolicy.createScript(script.textContent)
     newScript.async = false
     if (htmx.config.inlineScriptNonce) {
       newScript.nonce = htmx.config.inlineScriptNonce
@@ -1419,7 +1456,7 @@ var htmx = (function() {
     })
     forEach(mergeFrom.attributes, function(attr) {
       if (shouldSettleAttribute(attr.name)) {
-        mergeTo.setAttribute(attr.name, attr.value)
+        setAttribute(mergeTo, attr)
       }
     })
   }
@@ -2130,7 +2167,8 @@ var htmx = (function() {
             conditionalSource += ')})'
             try {
               const conditionFunction = maybeEval(elt, function() {
-                return Function(conditionalSource)()
+                // This can't use new Function() due to a Chromium bug: http://crbug.com/40133092
+                return (0, eval)(htmxPolicy.createScript(conditionalSource))
               },
               function() { return true })
               conditionFunction.source = conditionalSource
@@ -2859,7 +2897,8 @@ var htmx = (function() {
           return
         }
         if (!func) {
-          func = new Function('event', code)
+          // This can't use new Function() due to a Chromium bug: http://crbug.com/40133092
+          func = (0, eval)(`(function(event) {${htmxPolicy.createScript(code)}})`)
         }
         func.call(elt, e)
       })
@@ -3855,7 +3894,10 @@ var htmx = (function() {
       }
       let varsValues
       if (evaluateValue) {
-        varsValues = maybeEval(elt, function() { return Function('return (' + str + ')')() }, {})
+        varsValues = maybeEval(elt, function() {
+          // This can't use new Function() due to a Chromium bug: http://crbug.com/40133092
+          return (0, eval)(htmxPolicy.createScript(str))
+        }, {})
       } else {
         varsValues = parseJSON(str)
       }
@@ -5037,11 +5079,11 @@ var htmx = (function() {
     if (htmx.config.includeIndicatorStyles !== false) {
       const nonceAttribute = htmx.config.inlineStyleNonce ? ` nonce="${htmx.config.inlineStyleNonce}"` : ''
       getDocument().head.insertAdjacentHTML('beforeend',
-        '<style' + nonceAttribute + '>\
+        htmxPolicy.createHTML('<style' + nonceAttribute + '>\
       .' + htmx.config.indicatorClass + '{opacity:0}\
       .' + htmx.config.requestClass + ' .' + htmx.config.indicatorClass + '{opacity:1; transition: opacity 200ms ease-in;}\
       .' + htmx.config.requestClass + '.' + htmx.config.indicatorClass + '{opacity:1; transition: opacity 200ms ease-in;}\
-      </style>')
+      </style>'))
     }
   }
 
